@@ -1,16 +1,15 @@
-"""PeakStream Nervous System Scan API - Minimal Version"""
-import os
-from fastapi import FastAPI
 
-app = FastAPI(title="PeakStream Scan API")
-
-@app.get("/")
-async def root():
-    return {"status": "running", "service": "PeakStream Scan API"}
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy", "gemini_configured": bool(os.getenv("GEMINI_API_KEY"))}
+@app.post("/api/scan/test")
+async def test_scan():
+    if not GEMINI_API_KEY:
+        raise HTTPException(500, "Gemini not configured")
+    test = {"business_name": "Denver Plumbing Pro", "website_url": "https://example.com",
+            "industry": "Plumbing", "city": "Denver", "state": "CO", "google_rating": 4.6, "review_count": 47}
+    try:
+        results = run_scan(test)
+        return {"success": True, "test_business": test, "scan_results": results}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 if __name__ == "__main__":
     import uvicorn
