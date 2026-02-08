@@ -1,5 +1,5 @@
 """PeakStream Scan API"""
-import os, json
+import os, json, re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, HTTPException, Header
@@ -31,28 +31,29 @@ class ScanResponse(BaseModel):
 SCAN_PROMPT = """Analyze this business for AI visibility. Score 0-100.
 Business: {business_name} | {website_url} | {industry} | {city}, {state}
 Rating: {google_rating}/5 | Reviews: {review_count}
-Output JSON with: overall_score, category (Invisible/Weak/Moderate/Strong/Dominant), summary, modules (array with name/score/max_score/strength/observations), key_findings (3 items), recommendations (3 items with action/impact_points/reasoning/expected_outcome)"""
+Respond with ONLY valid JSON (no markdown): {{"overall_score": N, "category": "...", "summary": "...", "modules": [...], "key_findings": [...], "recommendations": [...]}}"""
 
 SOCIAL_PROMPT = """Generate 3 social posts for {business_name} ({industry}, {city}). Score: {scan_score}/100.
-Output JSON array: [{{"topic": "...", "text": "...", "best_for": "...", "when_to_post": "..."}}]"""
+Respond with ONLY valid JSON array (no markdown): [{{"topic": "...", "text": "...", "best_for": "...", "when_to_post": "..."}}]"""
+
+def extract_json(text):
+    text = re.sub(r'^```json\s*', '', text.strip())
+    text = re.sub(r'\s*```$', '', text)
+    return json.loads(text)
 
 def run_scan(d):
-    model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"temperature": 0.7, "response_mime_type": "application/json"})
-    return json.loads(model.generate_content(SCAN_PROMPT.format(**d)).text)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    resp = model.generate_content(SCAN_PROMPT.format(**d))
+    return extract_json(resp.text)
 
 def run_social(name, ind, city, score):
-    model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"temperature": 0.8, "response_mime_type": "application/json"})
-    return json.loads(model.generate_content(SOCIAL_PROMPT.format(business_name=name, industry=ind, city=city, scan_score=score)).text)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    resp = model.generate_content(SOCIAL_PROMPT.format(business_name=name, industry=ind, city=city, scan_score=score))
+    return extract_json(resp.text)
 
 def format_email(name, r, posts):
-    s = r["overall_score"]
-    h = f"<h2>SCAN REPORT: {name}</h2><p>Score: {s}/100 ({r['category']})</p><p>{r['summary']}</p>"
-    for m in r.get("modules", []): h += f"<p><b>{m['name']}: {m['score']}/{m['max_score']}</b></p>"
-    h += "<h3>Findings</h3><ul>"
-    for f in r.get("key_findings", []): h += f"<li>{f}</li>"
-    h += "</ul><h3>Recommendations</h3><ul>"
-    for x in r.get("recommendations", []): h += f"<li>{x['action']}</li>"
-    h += "</ul><p>Best, DD - PeakStream House</p>"
+    s = r.get("overall_score", 0)
+    h = f"<h2>SCAN: {name}</h2><p>Score: {s}/100 ({r.get('category', 'N/A')})</p><p>{r.get('summary', '')}</p>"
     return h
 
 @app.get("/")
@@ -68,7 +69,7 @@ async def scan(req: ScanRequest, authorization: str = Header(None)):
     try:
         d = {"business_name": req.business_name, "website_url": req.website_url or "N/A", "industry": req.industry, "city": req.city, "state": req.state, "google_rating": req.google_rating or "N/A", "review_count": req.review_count or 0}
         r = run_scan(d)
-        p = run_social(req.business_name, req.industry, req.city, r["overall_score"])
+        p = run_social(req.business_name, req.industry, req.city, r.get("overall_score", 50))
         return ScanResponse(success=True, scan_results=r, social_posts=p, email_body=format_email(req.business_name, r, p))
     except Exception as e: raise HTTPException(500, str(e))
 
